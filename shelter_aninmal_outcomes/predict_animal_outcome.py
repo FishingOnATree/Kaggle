@@ -12,6 +12,12 @@ import sklearn.grid_search as grid_search
 import sklearn.metrics as metrics
 import sklearn.svm as svm
 import timeit
+import sklearn.ensemble as ensemble
+
+
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Activation
+from keras.optimizers import SGD
 
 WEEKS_IN_A_MONTH = 4.35
 with open("breed_list.pkl", "r") as breed_list_file:
@@ -95,7 +101,7 @@ def map_breed_2(s):
 def map_breed_mix(s):
     breed1, breed2 = extract_breeds(s)
     breed_feature = np.asarray([1 if (b == breed1 or b == breed2) else 0 for b in BREED_LIST])
-    assert(sum(breed_feature) == 2)
+    #assert(sum(breed_feature) == 2)
     return breed_feature
 
 
@@ -118,7 +124,7 @@ def map_pure_color(s):
 def map_color_mix(s):
     color1, color2 = extract_color(s)
     color_feature = np.asarray([1 if (b == color1 or b == color2) else 0 for b in COLOR_LIST])
-    assert(sum(color_feature) == 2)
+    #assert(sum(color_feature) == 2)
     return color_feature
 
 
@@ -171,12 +177,12 @@ def load_data(fn):
 def extract_features(df, extract_y=True):
     x = df[["Gender", "Birthability", "AgeInMonth", "BestAdoptionAge", "DayOfWeek",
             "Purebreed", "HasName", "SingeColor"]].values
-    # x = np.append(x,
-    #               shape_list(df["Breed"].map(map_breed_mix).values),
-    #               axis=1)
-    # x = np.append(x,
-    #               shape_list(df["Color"].map(map_color_mix).values),
-    #               axis=1)
+    x = np.append(x,
+                  shape_list(df["Breed"].map(map_breed_mix).values),
+                  axis=1)
+    x = np.append(x,
+                  shape_list(df["Color"].map(map_color_mix).values),
+                  axis=1)
     if extract_y:
         y = df["OutcomeType"].map(lambda s: np.asarray(OUTCOME_TYPE.index(s))).values
     else:
@@ -184,7 +190,7 @@ def extract_features(df, extract_y=True):
     return x, y
 
 
-def train(df):
+def svm_train(df):
     x, y = extract_features(df)
     x_train, x_test, y_train, y_test = cv.train_test_split(x, y, test_size=0.3, random_state=42)
     tuned_parameters = [{'kernel': ['rbf'], 'C': [10, 100, 300], 'gamma': [0.003]}] #C 10,100,300
@@ -219,6 +225,107 @@ def train(df):
         print()
 
 
+def rf_train(df):
+    x, y = extract_features(df)
+    x_train, x_test, y_train, y_test = cv.train_test_split(x, y, test_size=0.3, random_state=42)
+    tuned_parameters = [{'n_estimators': [10, 50, 100], 'min_samples_leaf': [5, 10], 'min_samples_split': [5, 10, 20]}] #C 10,100,300
+    scores = ['accuracy']
+    for score in scores:
+        t0 = timeit.default_timer()
+        print("# Tuning hyper-parameters for %s" % score)
+        print()
+        clf = grid_search.GridSearchCV(ensemble.RandomForestClassifier(n_jobs=3, min_samples_leaf=1, min_samples_split=2), tuned_parameters, cv=5,
+                                       scoring='%s' % score)
+        clf.fit(x_train, y_train)
+
+        print("Best parameters set found on development set:")
+        print()
+        print(clf.best_params_)
+        print()
+        print("Grid scores on development set:")
+        print()
+        for params, mean_score, scores in clf.grid_scores_:
+            print("%0.3f (+/-%0.03f) for %r"
+                  % (mean_score, scores.std() * 2, params))
+        print()
+
+        print("Detailed classification report:")
+        print()
+        print("The model is trained on the full development set.")
+        print("The scores are computed on the full evaluation set.")
+        print()
+        y_true, y_pred = y_test, clf.predict(x_test)
+        print(metrics.classification_report(y_true, y_pred))
+        print("Total runtime: %.4f" % (timeit.default_timer() - t0))
+        print()
+
+
+def ada_train(df):
+    x, y = extract_features(df)
+    x_train, x_test, y_train, y_test = cv.train_test_split(x, y, test_size=0.3, random_state=42)
+    tuned_parameters = [{'n_estimators': [10, 50, 100, 150], 'learning_rate': [0.1, 1, 3, 10]}]
+    scores = ['accuracy']
+    for score in scores:
+        t0 = timeit.default_timer()
+        print("# Tuning hyper-parameters for %s" % score)
+        print()
+        clf = grid_search.GridSearchCV(ensemble.AdaBoostClassifier(random_state=42), tuned_parameters, cv=5,
+                                       scoring='%s' % score)
+        clf.fit(x_train, y_train)
+
+        print("Best parameters set found on development set:")
+        print()
+        print(clf.best_params_)
+        print()
+        print("Grid scores on development set:")
+        print()
+        for params, mean_score, scores in clf.grid_scores_:
+            print("%0.3f (+/-%0.03f) for %r"
+                  % (mean_score, scores.std() * 2, params))
+        print()
+
+        print("Detailed classification report:")
+        print()
+        print("The model is trained on the full development set.")
+        print("The scores are computed on the full evaluation set.")
+        print()
+        y_true, y_pred = y_test, clf.predict(x_test)
+        print(metrics.classification_report(y_true, y_pred))
+        print("Total runtime: %.4f" % (timeit.default_timer() - t0))
+        print()
+
+
+def nn_train(df):
+    x, y = extract_features(df)
+    x_train, x_cv, y_train, y_cv = cv.train_test_split(x, y, test_size=0.3, random_state=42)
+    batch_size = 1000
+    nb_epoch = 50
+    hidden_unit_width = 500
+    drop_out_rate = 0.25
+    model = Sequential()
+    model.add(Dense(input_dim=x_train.shape[1], output_dim=hidden_unit_width))
+    model.add(Activation('relu'))
+    model.add(Dropout(drop_out_rate))
+    model.add(Dense(input_dim=hidden_unit_width, output_dim=hidden_unit_width))
+    model.add(Activation('relu'))
+    model.add(Dropout(drop_out_rate))
+    model.add(Dense(input_dim=hidden_unit_width, output_dim=hidden_unit_width))
+    model.add(Activation('relu'))
+    model.add(Dropout(drop_out_rate))
+    model.add(Dense(output_dim=5))
+    model.add(Activation('softmax'))
+    # let's train the model using SGD + momentum (how original).
+    sgd = SGD(lr=0.03, decay=1e-6, momentum=0.9, nesterov=True)
+    model.compile(loss='sparse_categorical_crossentropy',
+                  optimizer=sgd,
+                  metrics=['accuracy'])
+    model.fit(x_train, y_train,
+              batch_size=batch_size,
+              nb_epoch=nb_epoch,
+              validation_data=(x_cv, y_cv),
+              shuffle=True)
+
+
 def train_and_save_model(df_train, fn):
     x_train, y_train = extract_features(df_train)
     clf = svm.SVC(C=100, gamma=0.003, decision_function_shape="ovo")
@@ -237,7 +344,8 @@ def save_results(df, fn):
     with open(fn, "wb") as csvfile:
         writer = csv.writer(csvfile, delimiter=',')
         writer.writerow(["ID", "Adoption",	"Died", "Euthanasia", "Return_to_owner", "Transfer"])
-        for a_id, prediction in df[["AnimalID", "prediction"]].values:
+        id_name = "ID" if "ID" in df else "AnimalID"
+        for a_id, prediction in df[[id_name, "prediction"]].values:
             row = [a_id]
             for index in range(len(OUTCOME_TYPE)):
                 row.append(1 if prediction == index else 0)
